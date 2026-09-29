@@ -45,12 +45,24 @@ override_dh_auto_configure:
 	    --with-attributelog=/var/lib/smartmontools/attrlog. \
 	    --with-drivedbinstdir=/usr/share/smartmontools \
 	    --with-drivedbdir=/var/lib/smartmontools/drivedb \
-	    --with-exampledir=/usr/share/doc/smartmontools/examples/ \
+	    --with-smartd-scripts=/usr/share/doc/smartmontools/examples/ \
 	    --with-savestates=/var/lib/smartmontools/smartd. \
+	    --with-jsonstate=yes \
+	    --with-build-info='(mithro/smartmontools Debian build)' \
+	    --without-devel \
 	    --with-smartdplugindir=/etc/smartmontools/smartd_warning.d \
 	    --with-smartdscriptdir=/usr/share/smartmontools \
 	    ${CONFIGURE_ARGS} \
 	;
+
+# Upstream's util/getversion.sh takes the version from git. dh_auto_build
+# replaces $HOME, which hides the builder's git safe.directory setting, and
+# git then refuses a checkout owned by another user (the CI checkout, in a
+# root container). So generate the version header first, with the builder's
+# $HOME; make then finds it up to date.
+override_dh_auto_build:
+	$(MAKE) -C include smartmon/version.sh
+	dh_auto_build
 
 override_dh_installinit:
 	dh_installinit --no-start

@@ -2,12 +2,12 @@ Source: smartmontools
 Section: utils
 Priority: optional
 Standards-Version: 4.7.2
-Maintainer: Dmitry Smirnov <onlyjob@debian.org>
-Uploaders: Florian Maier <contact@marsmenschen.com>,
-           Jonathan Dowland <jmtd@debian.org>,
+Maintainer: Tim 'mithro' Ansell <me@mith.ro>
+XSBC-Original-Maintainer: Dmitry Smirnov <onlyjob@debian.org>
 Build-Depends: autoconf,
                automake,
                debhelper-compat (= 13),
+               libtool,
                freebsd-glue [kfreebsd-any],
                libcam-dev [kfreebsd-any],
                libcap-ng-dev [linux-any],
@@ -15,8 +15,8 @@ Build-Depends: autoconf,
                libusb2-dev [kfreebsd-any],
                libsystemd-dev [linux-any],
                pkgconf,
-Vcs-Git: https://salsa.debian.org/debian/smartmontools.git
-Vcs-Browser: https://salsa.debian.org/debian/smartmontools
+Vcs-Git: https://github.com/mithro/smartmontools.git -b packaging
+Vcs-Browser: https://github.com/mithro/smartmontools/tree/packaging
 Homepage: https://www.smartmontools.org/
 Rules-Requires-Root: no
 
