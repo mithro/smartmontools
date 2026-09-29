@@ -511,6 +511,27 @@ struct persistent_dev_state
   nvme_smart_log nvme_smartval{};
 };
 
+/// SCSI lifetime counters, read only for the JSON state file.
+/// -1 (or empty): not read this cycle.
+struct scsi_lifetime_counters
+{
+  // Start-Stop Cycle Counter log page (0x0e)
+  std::string year_of_manufacture, week_of_manufacture;
+  int64_t specified_cycle_count = -1;
+  int64_t accumulated_start_stop_cycles = -1;
+  int64_t specified_load_unload_count = -1;
+  int64_t accumulated_load_unload_cycles = -1;
+  // Background Scan Results log page (0x15), parameter 0
+  int64_t power_on_minutes = -1;
+  int bms_status = -1;
+  int64_t bms_scans = -1;
+  int64_t bms_medium_scans = -1;
+  // Pending Defects log subpage (0x15,0x01)
+  int64_t pending_defects = -1;
+  // READ DEFECT DATA, grown list
+  int64_t grown_defects = -1;
+};
+
 /// Non-persistent state data for a device.
 struct temp_dev_state
 {
@@ -542,6 +563,7 @@ struct temp_dev_state
   bool selftest_log_refreshed{};          // state.selflogcount/selfloghour refreshed this cycle (any protocol)
   bool scsi_logs_refreshed{};             // state.scsi_error_counters/nonmedium_error refreshed this cycle
   bool ata_devstat_refreshed{};           // state.devstat refreshed this cycle (ATA only)
+  bool scsi_lifetime_refreshed{};         // state.scsi_lifetime refreshed this cycle (SCSI only)
   int attrlog_valid{};                    // nonzero if data is valid for protocol specific
                                           // attribute log: 1=ATA, 2=SCSI, 3=NVMe
 
@@ -553,6 +575,11 @@ struct temp_dev_state
   unsigned char WriteECounterPageSupported{};
   unsigned char VerifyECounterPageSupported{};
   unsigned char NonMediumErrorPageSupported{};
+  unsigned char StartStopPageSupported{}; // has log sense start-stop cycle counter page (0xe)
+  unsigned char BackgroundResultsPageSupported{}; // has log sense background scan results page (0x15)
+  bool no_pending_defects{};              // pending defects subpage (0x15,0x1) failed: don't retry
+  bool no_grown_defects{};                // READ DEFECT DATA unsupported: don't retry
+  scsi_lifetime_counters scsi_lifetime;   // for the JSON state file
   unsigned char SuppressReport{};         // minimize nuisance reports
   unsigned char modese_len{};             // mode sense/select cmd len: 0 (don't
                                           // know yet) 6 or 10
@@ -1002,6 +1029,40 @@ static void write_ata_devstat_json(json::ref jref, const dev_state & state)
   }
 }
 
+// Write the SCSI lifetime counters read this cycle with the names smartctl -j
+// gives them (scsiprint.cpp: scsiGetStartStopData(),
+// scsiPrintBackgroundResults(), scsiPrintPendingDefectsLPage(),
+// scsiPrintGrownDefectListLen()).
+static void write_scsi_lifetime_json(json & js, const scsi_lifetime_counters & lc)
+{
+  static const char jss[] = "scsi_start_stop_cycle_counter";
+  if (!lc.year_of_manufacture.empty()) {
+    js[jss]["year_of_manufacture"] = lc.year_of_manufacture;
+    js[jss]["week_of_manufacture"] = lc.week_of_manufacture;
+  }
+  if (lc.specified_cycle_count >= 0)
+    js[jss]["Specified cycle count over device lifetime"] = lc.specified_cycle_count;
+  if (lc.accumulated_start_stop_cycles >= 0)
+    js[jss]["Accumulated start-stop cycles"] = lc.accumulated_start_stop_cycles;
+  if (lc.specified_load_unload_count >= 0)
+    js[jss]["Specified load-unload count over device lifetime"] = lc.specified_load_unload_count;
+  if (lc.accumulated_load_unload_cycles >= 0)
+    js[jss]["Accumulated load-unload cycles"] = lc.accumulated_load_unload_cycles;
+
+  if (lc.power_on_minutes >= 0) {
+    js["power_on_time"]["hours"] = lc.power_on_minutes / 60;
+    js["power_on_time"]["minutes"] = lc.power_on_minutes % 60;
+    json::ref jst = js["scsi_background_scan"]["status"];
+    jst["value"] = lc.bms_status;
+    jst["number_scans_performed"] = lc.bms_scans;
+    jst["number_medium_scans_performed"] = lc.bms_medium_scans;
+  }
+  if (lc.pending_defects >= 0)
+    js["scsi_pending_defects"]["count"] = lc.pending_defects;
+  if (lc.grown_defects >= 0)
+    js["scsi_grown_defect_list"] = lc.grown_defects;
+}
+
 // Write a JSON state file for one device, using the same json tree builder
 // and field names as smartctl -j so consumers can share a single parser.
 // Caller gates on state.json_dirty (set when this cycle produced fresh data);
@@ -1107,6 +1168,8 @@ static bool write_dev_state_json(const char * path, const dev_config & cfg,
     }
 
     case 2: {
+      if (state.scsi_lifetime_refreshed)
+        write_scsi_lifetime_json(js, state.scsi_lifetime);
       if (!state.scsi_logs_refreshed)
         break; // skip scsi_error_counter_log when not refreshed this cycle (stale .state values)
       const char * page_names[3] = {"read", "write", "verify"};
@@ -3036,6 +3099,12 @@ static int SCSIDeviceScan(dev_config & cfg, dev_state & state, scsi_device * scs
       case NON_MEDIUM_ERROR_LPAGE:
         state.NonMediumErrorPageSupported = 1;
         break;
+      case STARTSTOP_CYCLE_COUNTER_LPAGE:
+        state.StartStopPageSupported = 1;
+        break;
+      case BACKGROUND_RESULTS_LPAGE:
+        state.BackgroundResultsPageSupported = 1;
+        break;
       default:
         break;
       }
@@ -4056,6 +4125,7 @@ static int ATACheckDevice(const dev_config & cfg, dev_state & state, ata_device 
   state.selftest_log_refreshed = false;
   state.scsi_logs_refreshed = false;
   state.ata_devstat_refreshed = false;
+  state.scsi_lifetime_refreshed = false;
 
   if (!open_device(cfg, state, atadev, "ATA"))
     return 1;
@@ -4307,6 +4377,113 @@ static int ATACheckDevice(const dev_config & cfg, dev_state & state, ata_device 
   return 0;
 }
 
+// Read the SCSI lifetime counters, for the JSON state file. Each log page
+// is fetched with a single LOG SENSE (fixed allocation length), and
+// READ DEFECT DATA asks only for the grown list's header.
+static void read_scsi_lifetime_counters(const char * name, scsi_device * scsidev, dev_state & state)
+{
+  scsi_lifetime_counters & lc = state.scsi_lifetime;
+  lc = scsi_lifetime_counters();
+  bool found = false;
+  uint8_t buf[252];
+
+  // Start-Stop Cycle Counter log page: manufacturing date and cycle counts
+  if (state.StartStopPageSupported
+      && !scsiLogSense(scsidev, STARTSTOP_CYCLE_COUNTER_LPAGE, 0, buf, sizeof(buf), -1)) {
+    int len = std::min<int>(sg_get_unaligned_be16(buf + 2), sizeof(buf) - 4);
+    for (const uint8_t * p = buf + 4; len >= 4; ) {
+      int pc = sg_get_unaligned_be16(p + 0);
+      int pl = p[3] + 4;
+      if (pl > len)
+        break;
+      if (pc == 1 && pl == 10) {
+        lc.year_of_manufacture.assign((const char *)p + 4, 4);
+        lc.week_of_manufacture.assign((const char *)p + 8, 2);
+        found = true;
+      }
+      else if (3 <= pc && pc <= 6 && pl >= 8) {
+        uint32_t u = sg_get_unaligned_be32(p + 4);
+        if (u != 0xffffffff) { // all ones: not reported
+          switch (pc) {
+            case 3: lc.specified_cycle_count = u; break;
+            case 4: lc.accumulated_start_stop_cycles = u; break;
+            case 5: lc.specified_load_unload_count = u; break;
+            case 6: lc.accumulated_load_unload_cycles = u; break;
+          }
+          found = true;
+        }
+      }
+      p += pl; len -= pl;
+    }
+  }
+
+  if (state.BackgroundResultsPageSupported) {
+    // Background Scan Results log page, status parameter: power-on time
+    if (!scsiLogSense(scsidev, BACKGROUND_RESULTS_LPAGE, 0, buf, sizeof(buf), -1)) {
+      const uint8_t * p = buf + 4;
+      int len = std::min<int>(sg_get_unaligned_be16(buf + 2), sizeof(buf) - 4);
+      if (len >= 16 && sg_get_unaligned_be16(p + 0) == 0 && p[3] + 4 >= 16) {
+        lc.power_on_minutes = sg_get_unaligned_be32(p + 4);
+        lc.bms_status = p[9];
+        lc.bms_scans = sg_get_unaligned_be16(p + 10);
+        lc.bms_medium_scans = sg_get_unaligned_be16(p + 14);
+        found = true;
+      }
+    }
+
+    // Pending Defects log subpage (SBC-4): count parameter
+    if (!state.no_pending_defects) {
+      if (!scsiLogSense(scsidev, BACKGROUND_RESULTS_LPAGE, PEND_DEFECTS_L_SPAGE,
+                        buf, sizeof(buf), -1)
+          && buf[1] == PEND_DEFECTS_L_SPAGE) {
+        const uint8_t * p = buf + 4;
+        int len = std::min<int>(sg_get_unaligned_be16(buf + 2), sizeof(buf) - 4);
+        if (len >= 8 && sg_get_unaligned_be16(p + 0) == 0 && p[3] + 4 >= 8) {
+          lc.pending_defects = sg_get_unaligned_be32(p + 4);
+          found = true;
+        }
+      }
+      else {
+        PrintOut(LOG_INFO, "Device: %s, no Pending Defects log subpage, not read again\n", name);
+        state.no_pending_defects = true;
+      }
+    }
+  }
+
+  // Grown defect list length, as smartctl -l defects gets it
+  if (!state.no_grown_defects) {
+    memset(buf, 0, 8);
+    bool rd12 = true;
+    int err = scsiReadDefect12(scsidev, 0 /* req_plist */, 1 /* req_glist */,
+                               4 /* bytes from index */, 0, buf, 8);
+    if (err == 2) { // READ DEFECT DATA (12) not supported
+      rd12 = false;
+      err = scsiReadDefect10(scsidev, 0, 1, 4, buf, 4);
+    }
+    if (err == 2 || err == 101) { // not supported, or no defect list
+      PrintOut(LOG_INFO, "Device: %s, no grown defect list, not read again\n", name);
+      state.no_grown_defects = true;
+    }
+    else if (!err && (buf[1] & 0x18) == 0x08) { // got the grown list
+      unsigned dl_len = (rd12 ? sg_get_unaligned_be32(buf + 4)
+                              : sg_get_unaligned_be16(buf + 2));
+      unsigned div = 0;
+      switch (buf[1] & 0x7) {
+        case 0: div = 4; break;                   // short block
+        case 1: case 2: case 3: case 4: case 5: div = 8; break;
+        default: break;                           // vendor specific, unknown
+      }
+      if (dl_len == 0 || div) {
+        lc.grown_defects = (dl_len ? dl_len / div : 0);
+        found = true;
+      }
+    }
+  }
+
+  if (found)
+    state.scsi_lifetime_refreshed = true;
+}
+
 static int SCSICheckDevice(const dev_config & cfg, dev_state & state, scsi_device * scsidev, bool allow_selftests)
 {
   // Reset per cycle; only positive/negative branches below overwrite this.
@@ -4323,6 +4500,7 @@ static int SCSICheckDevice(const dev_config & cfg, dev_state & state, scsi_devic
   state.selftest_log_refreshed = false;
   state.scsi_logs_refreshed = false;
   state.ata_devstat_refreshed = false;
+  state.scsi_lifetime_refreshed = false;
 
   if (!open_device(cfg, state, scsidev, "SCSI"))
     return 1;
@@ -4424,6 +4602,10 @@ static int SCSICheckDevice(const dev_config & cfg, dev_state & state, scsi_devic
       state.attrlog_valid = 2; // SCSI attributes valid
     state.scsi_logs_refreshed = true;
   }
+
+  // Lifetime counters, for the JSON state file only
+  if (!cfg.json_state_file.empty())
+    read_scsi_lifetime_counters(name, scsidev, state);
 
   CloseDevice(scsidev, name);
   state.json_dirty = true;
@@ -4601,6 +4783,7 @@ static int NVMeCheckDevice(const dev_config & cfg, dev_state & state, nvme_devic
   state.selftest_log_refreshed = false;
   state.scsi_logs_refreshed = false;
   state.ata_devstat_refreshed = false;
+  state.scsi_lifetime_refreshed = false;
 
   if (!open_device(cfg, state, nvmedev, "NVMe"))
     return 1;
