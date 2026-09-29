@@ -14,8 +14,8 @@ Refreshed by nirgal@debian.org 2019-09-17
  smartd.conf.5.in | 10 ++++++++++
  2 files changed, 16 insertions(+)
 
---- a/smartd.conf.5.in
-+++ b/smartd.conf.5.in
+--- a/src/smartd.conf.5.in
++++ b/src/smartd.conf.5.in
 @@ -164,8 +164,14 @@
  /dev/sda \-d cciss,1 \-a \-s (L/../../7/03|S/../.././03) \-m root
  .\" %ENDIF OS Linux

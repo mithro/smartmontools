@@ -9,8 +9,8 @@ Closes: #406130
  smartd.conf | 2 +-
  1 file changed, 1 insertion(+), 1 deletion(-)
 
---- a/smartd.conf
-+++ b/smartd.conf
+--- a/src/smartd.conf
++++ b/src/smartd.conf
 @@ -14,9 +14,9 @@
  # ATA and SCSI devices.  DEVICESCAN may be followed by any of the
  # Directives listed below, which will be applied to all devices that

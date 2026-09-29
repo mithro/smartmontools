@@ -7,8 +7,8 @@ Fixed example path in man pages
  smartd.conf.5.in | 2 +-
  1 file changed, 1 insertion(+), 1 deletion(-)
 
---- a/smartd.conf.5.in
-+++ b/smartd.conf.5.in
+--- a/src/smartd.conf.5.in
++++ b/src/smartd.conf.5.in
 @@ -1788,9 +1788,9 @@
  /sbin/shutdown \-hf now
  .Ve
