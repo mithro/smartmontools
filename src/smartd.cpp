@@ -541,6 +541,7 @@ struct temp_dev_state
   bool ata_errorlog_refreshed{};          // state.ataerrorcount refreshed this cycle (ATA only)
   bool selftest_log_refreshed{};          // state.selflogcount/selfloghour refreshed this cycle (any protocol)
   bool scsi_logs_refreshed{};             // state.scsi_error_counters/nonmedium_error refreshed this cycle
+  bool ata_devstat_refreshed{};           // state.devstat refreshed this cycle (ATA only)
   int attrlog_valid{};                    // nonzero if data is valid for protocol specific
                                           // attribute log: 1=ATA, 2=SCSI, 3=NVMe
 
@@ -560,6 +561,13 @@ struct temp_dev_state
   ata_smart_values smartval{};            // SMART data
   ata_smart_thresholds_pvt smartthres{};  // SMART thresholds
   bool offline_started{};                 // true if offline data collection was started
+
+  // Device Statistics (log 0x04), read only for the JSON state file
+  static const int num_devstat_pages = 8; // pages 0x01-0x07 (0x00 is the list)
+  bool devstat_gplog{};                   // read with READ LOG EXT, else SMART READ LOG
+  bool devstat_supported[num_devstat_pages]{}; // page listed in page 0x00
+  bool devstat_valid[num_devstat_pages]{};     // page read this cycle
+  unsigned char devstat[num_devstat_pages][512]{};
 
   // ATA and NVMe
   bool selftest_started{};                // true if self-test was started
@@ -923,6 +931,77 @@ static void write_nvme_attrlog(FILE * f, const dev_state & state)
   );
 }
 
+// Write the Device Statistics read this cycle as smartctl -j -l devstat
+// writes them (ataprint.cpp, print_device_statistics_page()).
+static void write_ata_devstat_json(json::ref jref, const dev_state & state)
+{
+  int jp = 0;
+  for (int page = 1; page < state.num_devstat_pages; page++) {
+    if (!state.devstat_valid[page])
+      continue;
+    const unsigned char * data = state.devstat[page];
+    if (data[2] != page) // empty or invalid page
+      continue;
+
+    json::ref jpage = jref["pages"][jp++];
+    jpage["number"] = page;
+    jpage["name"] = ata_get_devstat_page_name(page);
+    jpage["revision"] = data[0] | (data[1] << 8);
+
+    const ata_devstat_entry_info * info = ata_get_devstat_page_info(page);
+    int ji = 0;
+    for (int i = 1, offset = 8; offset < 512-7; i++, offset += 8) {
+      if (info && !info[i].size)
+        info = nullptr;
+
+      unsigned char flags = data[offset+7];
+      if (!(flags & 0x80)) // not supported
+        continue;
+      if (!info && (data[offset+5] || data[offset+6]))
+        break; // trailing garbage
+
+      int size = (info ? info[i].size : 7);
+      bool valid = !!(flags & 0x40);
+      bool normalized = !!(flags & 0x20);
+      bool supports_dsn = !!(flags & 0x10);
+      bool monitored_condition_met = !!(flags & 0x08);
+
+      json::ref jentry = jpage["table"][ji++];
+      jentry["offset"] = offset;
+      jentry["name"] = (info ? info[i].name : "Unknown");
+      jentry["size"] = abs(size);
+      if (valid) {
+        int64_t val = 0;
+        if (size < 0)
+          val = (signed char)data[offset];
+        else {
+          for (int j = 0; j < size; j++)
+            val |= (int64_t)data[offset+j] << (j*8);
+        }
+        jentry["value"] = val;
+      }
+
+      char flagstr[] = {
+        (valid ? 'V' : '-'),
+        (normalized ? 'N' : '-'),
+        (supports_dsn ? 'D' : '-'),
+        (monitored_condition_met ? 'C' : '-'),
+        ((flags & 0x07) ? '+' : ' '),
+        0
+      };
+      json::ref jflags = jentry["flags"];
+      jflags["value"] = flags;
+      jflags["string"] = flagstr;
+      jflags["valid"] = valid;
+      jflags["normalized"] = normalized;
+      jflags["supports_dsn"] = supports_dsn;
+      jflags["monitored_condition_met"] = monitored_condition_met;
+      if (flags & 0x07)
+        jflags["other"] = (flags & 0x07);
+    }
+  }
+}
+
 // Write a JSON state file for one device, using the same json tree builder
 // and field names as smartctl -j so consumers can share a single parser.
 // Caller gates on state.json_dirty (set when this cycle produced fresh data);
@@ -979,6 +1058,9 @@ static bool write_dev_state_json(const char * path, const dev_config & cfg,
         const char * logkey = cfg.xerrorlog ? "extended" : "summary";
         js["ata_smart_error_log"][logkey]["count"] = state.ataerrorcount;
       }
+
+      if (state.ata_devstat_refreshed)
+        write_ata_devstat_json(js["ata_device_statistics"], state);
 
       if (!state.ata_attr_refreshed)
         break; // skip ata_smart_attributes table when state.smartval is stale (e.g. -H-only config restored from .state)
@@ -2249,6 +2331,76 @@ static bool is_duplicate_dev_idinfo(const dev_config & cfg, const dev_config_vec
 // TODO: Add '-F swapid' directive
 const bool fix_swapped_id = false;
 
+// Find the Device Statistics pages (log 0x04) of an ATA device, for the
+// JSON state file. Reads only page 0x00, the list of supported pages.
+static void find_ata_devstat_pages(ata_device * atadev, const char * name,
+                                   const ata_identify_device & drive, dev_state & state)
+{
+  unsigned char page_0[512] = {};
+  if (ata_is_gp_log_capable(drive) && ata_read_log_ext(atadev, 0x04, 0, 0, page_0, 1))
+    state.devstat_gplog = true;
+  else if (ata_read_smart_log(atadev, 0x04, page_0, 1))
+    state.devstat_gplog = false;
+  else {
+    PrintOut(LOG_INFO, "Device: %s, no Device Statistics log\n", name);
+    return;
+  }
+
+  int nentries = page_0[8];
+  if (!(page_0[2] == 0 && nentries > 0)) {
+    PrintOut(LOG_INFO, "Device: %s, Device Statistics page 0x00 is invalid\n", name);
+    return;
+  }
+  std::string pages;
+  for (int i = 0; i < nentries && 9 + i < (int)sizeof(page_0); i++) {
+    int page = page_0[9 + i];
+    if (0 < page && page < state.num_devstat_pages) {
+      state.devstat_supported[page] = true;
+      pages += strprintf(" 0x%02x", page);
+    }
+  }
+  PrintOut(LOG_INFO, "Device: %s, Device Statistics (%s Log 0x04) pages:%s\n", name,
+           (state.devstat_gplog ? "GP" : "SMART"), (!pages.empty() ? pages.c_str() : " none"));
+}
+
+// Read the supported Device Statistics pages, for the JSON state file.
+static void read_ata_devstat(ata_device * atadev, dev_state & state)
+{
+  int last = 0;
+  for (int page = 1; page < state.num_devstat_pages; page++) {
+    state.devstat_valid[page] = false;
+    if (state.devstat_supported[page])
+      last = page;
+  }
+  if (!last)
+    return;
+
+  if (state.devstat_gplog) {
+    for (int page = 1; page <= last; page++) {
+      if (state.devstat_supported[page]
+          && ata_read_log_ext(atadev, 0x04, 0, page, state.devstat[page], 1))
+        state.devstat_valid[page] = true;
+    }
+  }
+  else {
+    // SMART READ LOG always starts at page 0x00: read up to the last page
+    std::vector<unsigned char> buf((last + 1) * 512);
+    if (!ata_read_smart_log(atadev, 0x04, buf.data(), last + 1))
+      return;
+    for (int page = 1; page <= last; page++) {
+      if (!state.devstat_supported[page])
+        continue;
+      memcpy(state.devstat[page], buf.data() + page * 512, 512);
+      state.devstat_valid[page] = true;
+    }
+  }
+
+  for (int page = 1; page <= last; page++) {
+    if (state.devstat_valid[page])
+      state.ata_devstat_refreshed = true;
+  }
+}
+
 // scan to see what ata devices there are, and if they support SMART
 static int ATADeviceScan(dev_config & cfg, dev_state & state, ata_device * atadev,
                          const dev_config_vector * prev_cfgs)
@@ -2512,6 +2664,10 @@ static int ATADeviceScan(dev_config & cfg, dev_state & state, ata_device * atade
     if (ata_read_log_directory(atadev, gp_logdir, true))
       gp_logdir_ok = true;
   }
+
+  // Device Statistics are only read for the JSON state file
+  if (!json_state_path_prefix.empty())
+    find_ata_devstat_pages(atadev, name, drive, state);
 
   // capability check: self-test-log
   state.selflogcount = 0; state.selfloghour = 0;
@@ -3899,6 +4055,7 @@ static int ATACheckDevice(const dev_config & cfg, dev_state & state, ata_device 
   state.ata_errorlog_refreshed = false;
   state.selftest_log_refreshed = false;
   state.scsi_logs_refreshed = false;
+  state.ata_devstat_refreshed = false;
 
   if (!open_device(cfg, state, atadev, "ATA"))
     return 1;
@@ -4139,6 +4296,10 @@ static int ATACheckDevice(const dev_config & cfg, dev_state & state, ata_device 
       DoATASelfTest(cfg, state, atadev, testtype);
   }
 
+  // Device Statistics, for the JSON state file only
+  if (!cfg.json_state_file.empty())
+    read_ata_devstat(atadev, state);
+
   // Don't leave device open -- the OS/user may want to access it
   // before the next smartd cycle!
   CloseDevice(atadev, name);
@@ -4161,6 +4322,7 @@ static int SCSICheckDevice(const dev_config & cfg, dev_state & state, scsi_devic
   state.ata_errorlog_refreshed = false;
   state.selftest_log_refreshed = false;
   state.scsi_logs_refreshed = false;
+  state.ata_devstat_refreshed = false;
 
   if (!open_device(cfg, state, scsidev, "SCSI"))
     return 1;
@@ -4438,6 +4600,7 @@ static int NVMeCheckDevice(const dev_config & cfg, dev_state & state, nvme_devic
   state.ata_errorlog_refreshed = false;
   state.selftest_log_refreshed = false;
   state.scsi_logs_refreshed = false;
+  state.ata_devstat_refreshed = false;
 
   if (!open_device(cfg, state, nvmedev, "NVMe"))
     return 1;
