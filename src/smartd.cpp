@@ -4215,7 +4215,9 @@ static int SCSICheckDevice(const dev_config & cfg, dev_state & state, scsi_devic
       DoSCSISelfTest(cfg, state, scsidev, testtype);
   }
 
-  if (!cfg.attrlog_file.empty()){
+  // The error counters are written to the attribute log and to the JSON
+  // state file, so read them when either is enabled.
+  if (!cfg.attrlog_file.empty() || !cfg.json_state_file.empty()) {
     state.scsi_error_counters[0] = {};
     state.scsi_error_counters[1] = {};
     state.scsi_error_counters[2] = {};
