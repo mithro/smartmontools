@@ -1,0 +1,15 @@
+#!/bin/sh
+set -e
+
+# Remove shutdown and reboot links; this init script does not need them.
+case "$1" in
+  configure)
+    if [ -x "$(command -v update-smart-drivedb)" ]; then
+        update-smart-drivedb --install
+    else
+        cp -f /usr/share/smartmontools/drivedb.h  /var/lib/smartmontools/drivedb/
+    fi
+  ;;
+esac
+
+#DEBHELPER#

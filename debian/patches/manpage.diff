@@ -1,0 +1,22 @@
+From: Giuseppe Iuculano <iuculano@debian.org>
+Date: Thu, 27 Sep 2018 19:03:07 +0800
+Subject: manpage
+
+Fixed example path in man pages
+---
+ smartd.conf.5.in | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+--- a/smartd.conf.5.in
++++ b/smartd.conf.5.in
+@@ -1788,9 +1788,9 @@
+ /sbin/shutdown \-hf now
+ .Ve
+ .Sp
+ Some example scripts are distributed with the smartmontools package,
+-in /usr/local/share/doc/smartmontools/examplescripts/.
++in /usr/local/share/doc/smartmontools/examples/.
+ .Sp
+ Please note that these scripts typically run as root, so any files
+ that they read/write should not be writable by ordinary users or
+ reside in directories like /tmp that are writable by ordinary users

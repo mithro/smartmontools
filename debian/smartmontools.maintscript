@@ -1,0 +1,3 @@
+rm_conffile  /etc/smartd_warning.sh  6.3+svn4002-2~
+rm_conffile  /etc/init.d/smartd      6.1+svn3812-1~
+rm_conffile  /etc/smartmontools/run.d/10powersave-notify  7.0~

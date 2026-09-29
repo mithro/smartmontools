@@ -1,0 +1,21 @@
+From: Giuseppe Iuculano <iuculano@debian.org>
+Date: Thu, 27 Sep 2018 19:03:07 +0800
+Subject: _use-smartd-runner-by-default
+
+---
+ smartd.conf | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+--- a/smartd.conf
++++ b/smartd.conf
+@@ -14,9 +14,9 @@
+ # ATA and SCSI devices.  DEVICESCAN may be followed by any of the
+ # Directives listed below, which will be applied to all devices that
+ # are found.  Most users should comment out DEVICESCAN and explicitly
+ # list the devices that they wish to monitor.
+-DEVICESCAN
++DEVICESCAN -n standby -m root -M exec /usr/share/smartmontools/smartd-runner
+ 
+ # Alternative setting to ignore temperature and power-on hours reports
+ # in syslog.
+ #DEVICESCAN -I 194 -I 231 -I 9

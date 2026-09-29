@@ -1,0 +1,2 @@
+debian/smartd-runner usr/share/smartmontools
+debian/10mail etc/smartmontools/run.d

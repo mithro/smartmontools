@@ -1,0 +1,31 @@
+Origin: upstream, https://github.com/smartmontools/smartmontools/pull/292/commits/96d632fc75cbcb45a5f0e243ee5211e5aa5be3c6
+Forwarded: not-needed
+From 96d632fc75cbcb45a5f0e243ee5211e5aa5be3c6 Mon Sep 17 00:00:00 2001
+From: Aleksander Jan Bajkowski <olek2@wp.pl>
+Date: Tue, 22 Oct 2024 17:16:45 +0200
+Subject: [PATCH] autogen.sh: allow automake 1.17
+
+--- a/autogen.sh
++++ b/autogen.sh
+@@ -22,9 +22,9 @@
+ if [ -n "$AUTOMAKE" ]; then
+   ver=$("$AUTOMAKE" --version) || exit 1
+ else
+   maxver=
+-  for v in 1.17 1.16 1.15 1.14 1.13; do
++  for v in 1.19 1.18 1.17 1.16 1.15 1.14 1.13; do
+     minver=$v; test -n "$maxver" || maxver=$v
+     ver=$(automake-$v --version 2>/dev/null) || continue
+     AUTOMAKE="automake-$v"
+     break
+@@ -58,9 +58,9 @@
+   1.13.[34])
+     # OK
+     ;;
+ 
+-  1.14|1.14.1|1.15|1.15.1|1.16|1.16.[1-5]|1.17)
++  1.14|1.14.1|1.15|1.15.1|1.16|1.16.[1-5]|1.17|1.18|1.19)
+     # TODO: Enable 'subdir-objects' in configure.ac
+     # For now, suppress 'subdir-objects' forward-incompatibility warning
+     test -n "$warnings" || amwarnings="--warnings=no-unsupported"
+     ;;

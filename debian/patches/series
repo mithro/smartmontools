@@ -1,0 +1,7 @@
+52_remove-pragma.diff
+53_use-smartd-runner-by-default.diff
+61_cciss-doc.patch
+63_removable.patch
+automake.patch
+manpage.diff
+service-alias.patch

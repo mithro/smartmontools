@@ -1,0 +1,12 @@
+#!/bin/sh -e
+
+# check whether /usr/bin/mail exists and is executable
+if ! [ -x /usr/bin/mail ]; then
+	printf 'Your system does not have /usr/bin/mail. Install the bsd-mailx or mailutils package.\n' >&2
+	exit 1
+fi
+
+# send mail to each given address (separately for privacy reasons)
+for address in ${SMARTD_ADDRESS}; do
+	printf '%s' "${SMARTD_FULLMESSAGE}" | /usr/bin/mail -s "${SMARTD_SUBJECT}" "${address}"
+done

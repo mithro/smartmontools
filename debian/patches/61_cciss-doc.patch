@@ -1,0 +1,46 @@
+From: Giuseppe Iuculano <iuculano@debian.org>
+Date: Thu, 27 Sep 2018 19:03:07 +0800
+Subject: Update cciss examples/docs
+
+Here is a patch that adds examples for cciss to the default smartd.conf
+file and adds some more cciss documentation to the manpages. I think this
+patch gets things to parity with the 3ware documentation with a couple
+minor exceptions
+
+Refreshed by jmtd@debian.org 2018-08-10
+Refreshed by nirgal@debian.org 2019-09-17
+---
+ smartd.conf      |  6 ++++++
+ smartd.conf.5.in | 10 ++++++++++
+ 2 files changed, 16 insertions(+)
+
+--- a/smartd.conf.5.in
++++ b/smartd.conf.5.in
+@@ -164,8 +164,14 @@
+ /dev/sda \-d cciss,1 \-a \-s (L/../../7/03|S/../.././03) \-m root
+ .\" %ENDIF OS Linux
+ .\" %IF OS FreeBSD Linux
+ #
++# Monitor 2 disks connected to the first HP SmartArray controller which
++# uses the cciss driver. Start long tests on Sunday nights and short
++# self-tests every night and send errors to root
++# \ /dev/sda -d cciss,0 -a -s (L/../../7/02|S/../.././02) -m root
++# \ /dev/sda -d cciss,1 -a -s (L/../../7/03|S/../.././03) -m root
++#
+ # Three SATA disks on a HighPoint RocketRAID controller.
+ # Start short self\-tests daily between 1\-2, 2\-3, and
+ # 3\-4 am.
+ .\" %ENDIF OS FreeBSD Linux
+@@ -231,8 +237,12 @@
+ #
+ ################################################
+ .Ve
+ .Sp
++.B If a cciss controller is used
++then the corresponding block device (/dev/sd?) must be listed,
++along with the \'\-d cciss,N\' Directive (see below).
++.TP
+ .SH DEVICESCAN
+ If a non-comment entry in the configuration file is the text string
+ .B DEVICESCAN
+ in capital letters, then
