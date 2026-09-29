@@ -259,6 +259,21 @@ bool ata_write_log_ext(ata_device * device, uint8_t logaddr, uint16_t page, cons
 // Read SMART Log page(s)
 bool ata_read_smart_log(ata_device * device, uint8_t logaddr, void * log, uint8_t nsectors);
 
+// Device Statistics (log 0x04): description of the entries of a page.
+struct ata_devstat_entry_info
+{
+  short size; // #bytes of value, -1 for signed char, 0 ends the table
+  const char * name;
+};
+
+// Entries of Device Statistics page PAGE, or nullptr if the page is
+// unknown. Entry [0] describes the page header: its name is the page's
+// name. Entry [i] describes the value at offset 8*i.
+const ata_devstat_entry_info * ata_get_devstat_page_info(int page);
+
+// Name of Device Statistics page PAGE.
+const char * ata_get_devstat_page_name(int page);
+
 /// Write SMART Log page(s).
 bool ata_write_smart_log(ata_device * device, uint8_t logaddr, const void * log, uint8_t nsectors);
 

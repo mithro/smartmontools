@@ -1674,120 +1674,6 @@ static void PrintLogPages(const char * type, const unsigned char * data,
 // Section A.5 of T13/2161-D (ACS-3) Revision 5, October 28, 2013
 // Section 9.5 of T13/BSR INCITS 529 (ACS-4) Revision 20, October 26, 2017
 
-struct devstat_entry_info
-{
-  short size; // #bytes of value, -1 for signed char
-  const char * name;
-};
-
-const devstat_entry_info devstat_info_0x00[] = {
-  {  2, "List of supported log pages" },
-  {  0, 0 }
-};
-
-const devstat_entry_info devstat_info_0x01[] = {
-  {  2, "General Statistics" },
-  {  4, "Lifetime Power-On Resets" },
-  {  4, "Power-on Hours" },
-  {  6, "Logical Sectors Written" },
-  {  6, "Number of Write Commands" },
-  {  6, "Logical Sectors Read" },
-  {  6, "Number of Read Commands" },
-  {  6, "Date and Time TimeStamp" }, // ACS-3
-  {  4, "Pending Error Count" }, // ACS-4
-  {  2, "Workload Utilization" }, // ACS-4
-  {  6, "Utilization Usage Rate" }, // ACS-4 (TODO: 47:40: Validity, 39:36 Basis, 7:0 Usage rate)
-  {  7, "Resource Availability" }, // ACS-4 (TODO: 55:16 Resources, 15:0 Fraction)
-  {  1, "Random Write Resources Used" }, // ACS-4
-  {  0, 0 }
-};
-
-const devstat_entry_info devstat_info_0x02[] = {
-  {  2, "Free-Fall Statistics" },
-  {  4, "Number of Free-Fall Events Detected" },
-  {  4, "Overlimit Shock Events" },
-  {  0, 0 }
-};
-
-const devstat_entry_info devstat_info_0x03[] = {
-  {  2, "Rotating Media Statistics" },
-  {  4, "Spindle Motor Power-on Hours" },
-  {  4, "Head Flying Hours" },
-  {  4, "Head Load Events" },
-  {  4, "Number of Reallocated Logical Sectors" },
-  {  4, "Read Recovery Attempts" },
-  {  4, "Number of Mechanical Start Failures" },
-  {  4, "Number of Realloc. Candidate Logical Sectors" }, // ACS-3
-  {  4, "Number of High Priority Unload Events" }, // ACS-3
-  {  0, 0 }
-};
-
-const devstat_entry_info devstat_info_0x04[] = {
-  {  2, "General Errors Statistics" },
-  {  4, "Number of Reported Uncorrectable Errors" },
-//{  4, "Number of Resets Between Command Acceptance and Command Completion" },
-  {  4, "Resets Between Cmd Acceptance and Completion" },
-  {  4, "Physical Element Status Changed" }, // ACS-4
-  {  0, 0 }
-};
-
-const devstat_entry_info devstat_info_0x05[] = {
-  {  2, "Temperature Statistics" },
-  { -1, "Current Temperature" },
-  { -1, "Average Short Term Temperature" },
-  { -1, "Average Long Term Temperature" },
-  { -1, "Highest Temperature" },
-  { -1, "Lowest Temperature" },
-  { -1, "Highest Average Short Term Temperature" },
-  { -1, "Lowest Average Short Term Temperature" },
-  { -1, "Highest Average Long Term Temperature" },
-  { -1, "Lowest Average Long Term Temperature" },
-  {  4, "Time in Over-Temperature" },
-  { -1, "Specified Maximum Operating Temperature" },
-  {  4, "Time in Under-Temperature" },
-  { -1, "Specified Minimum Operating Temperature" },
-  {  0, 0 }
-};
-
-const devstat_entry_info devstat_info_0x06[] = {
-  {  2, "Transport Statistics" },
-  {  4, "Number of Hardware Resets" },
-  {  4, "Number of ASR Events" },
-  {  4, "Number of Interface CRC Errors" },
-  {  0, 0 }
-};
-
-const devstat_entry_info devstat_info_0x07[] = {
-  {  2, "Solid State Device Statistics" },
-  {  1, "Percentage Used Endurance Indicator" },
-  {  0, 0 }
-};
-
-const devstat_entry_info * devstat_infos[] = {
-  devstat_info_0x00,
-  devstat_info_0x01,
-  devstat_info_0x02,
-  devstat_info_0x03,
-  devstat_info_0x04,
-  devstat_info_0x05,
-  devstat_info_0x06,
-  devstat_info_0x07
-  // TODO: 0x08 Zoned Device Statistics (T13/f16136r7, January 2017)
-  // TODO: 0x09 Command Duration Limits Statistics (ACS-5 Revision 10, March 2021)
-  // TODO: 0x0a Command Duration Limits Statistics 2..3 (ACS-6 Revision 3, March 2023)
-};
-
-const int num_devstat_infos = sizeof(devstat_infos)/sizeof(devstat_infos[0]);
-
-static const char * get_device_statistics_page_name(int page)
-{
-  if (page < num_devstat_infos)
-    return devstat_infos[page][0].name;
-  if (page == 0xff)
-    return "Vendor Specific Statistics"; // ACS-4
-  return "Unknown Statistics";
-}
-
 static void get_device_statistics_extra_info(char (& buf)[32], int page, int offset,
   int64_t val, unsigned log_sector_size, const char * decimal_point = nullptr)
 {
@@ -1856,8 +1742,8 @@ static void set_json_globals_from_device_statistics(int page, int offset, int64_
 static void print_device_statistics_page(const json::ref & jref, const unsigned char * data,
   int page, unsigned log_sector_size)
 {
-  const devstat_entry_info * info = (page < num_devstat_infos ? devstat_infos[page] : 0);
-  const char * name = get_device_statistics_page_name(page);
+  const ata_devstat_entry_info * info = ata_get_devstat_page_info(page);
+  const char * name = ata_get_devstat_page_name(page);
 
   // Check page number in header
   static const char line[] = "  =====  =               =  ===  == ";
@@ -2033,7 +1919,7 @@ static bool print_device_statistics(ata_device * device, unsigned nsectors,
     jout("Page  Description\n");
     for (i = 0; i < nentries; i++) {
       int page = page_0[8+1+i];
-      const char * name = get_device_statistics_page_name(page);
+      const char * name = ata_get_devstat_page_name(page);
       jout("0x%02x  %s\n", page, name);
       jref["supported_pages"][i]["number"] = page;
       jref["supported_pages"][i]["name"] = name;
