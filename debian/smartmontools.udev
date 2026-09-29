@@ -1,0 +1,7 @@
+# smartd scans for devices only when it starts or reloads (SIGHUP), so a disk
+# hot-plugged (or moved in from another host) after boot isn't monitored until
+# the next restart; a removed one stays registered. Reload smartd whenever a
+# whole disk comes or goes. Partitions and "change" events (which udev's
+# inotify watch raises on every close after a write) don't trigger it.
+ACTION=="add|remove", SUBSYSTEM=="block", ENV{DEVTYPE}=="disk", KERNEL=="sd*|nvme*", \
+  RUN+="/bin/systemctl --no-block try-reload-or-restart smartmontools.service"
