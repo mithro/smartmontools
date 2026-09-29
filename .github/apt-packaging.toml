@@ -1,0 +1,9 @@
+# What kind of packaging repository this is, and why it differs from the
+# defaults: mithro/apt-repo-action's docs/packaging.md ("The declaration").
+kind = "A"
+upstream = "https://github.com/smartmontools/smartmontools"
+
+[exceptions]
+# The shared scripts/deb-version.py doesn't implement the Set A version yet
+# (docs/compliance-plan.md, section 3), so packaging/deb-version.py does.
+PKG-VERSION = "Set A version from packaging/deb-version.py until the shared script has it"
