@@ -532,6 +532,19 @@ struct scsi_lifetime_counters
   int64_t grown_defects = -1;
 };
 
+/// Error counters of one SAS phy, from the Protocol Specific Port log page
+/// (0x18), read only for the JSON state file.
+struct scsi_sas_phy_counters
+{
+  int port{};                   // index of the port parameter (as smartctl)
+  int identifier{};             // phy identifier
+  int link_rate{};              // negotiated logical link rate code
+  uint32_t invalid_dwords{};
+  uint32_t running_disparity_errors{};
+  uint32_t loss_of_dword_sync{};
+  uint32_t phy_reset_problems{};
+};
+
 /// Non-persistent state data for a device.
 struct temp_dev_state
 {
@@ -564,6 +577,7 @@ struct temp_dev_state
   bool scsi_logs_refreshed{};             // state.scsi_error_counters/nonmedium_error refreshed this cycle
   bool ata_devstat_refreshed{};           // state.devstat refreshed this cycle (ATA only)
   bool scsi_lifetime_refreshed{};         // state.scsi_lifetime refreshed this cycle (SCSI only)
+  bool scsi_phys_refreshed{};             // state.scsi_phys refreshed this cycle (SAS only)
   int attrlog_valid{};                    // nonzero if data is valid for protocol specific
                                           // attribute log: 1=ATA, 2=SCSI, 3=NVMe
 
@@ -580,6 +594,8 @@ struct temp_dev_state
   bool no_pending_defects{};              // pending defects subpage (0x15,0x1) failed: don't retry
   bool no_grown_defects{};                // READ DEFECT DATA unsupported: don't retry
   scsi_lifetime_counters scsi_lifetime;   // for the JSON state file
+  unsigned char ProtocolSpecificPageSupported{}; // has log sense protocol specific port page (0x18)
+  std::vector<scsi_sas_phy_counters> scsi_phys; // for the JSON state file
   unsigned char SuppressReport{};         // minimize nuisance reports
   unsigned char modese_len{};             // mode sense/select cmd len: 0 (don't
                                           // know yet) 6 or 10
@@ -1063,6 +1079,40 @@ static void write_scsi_lifetime_json(json & js, const scsi_lifetime_counters & l
     js["scsi_grown_defect_list"] = lc.grown_defects;
 }
 
+// Write the SAS phy error counters read this cycle as smartctl -j -l sasphy
+// writes them (scsiprint.cpp, show_sas_port_param()).
+static void write_scsi_sas_phys_json(json & js, const std::vector<scsi_sas_phy_counters> & phys)
+{
+  for (const scsi_sas_phy_counters & phy : phys) {
+    const char * rate;
+    switch (phy.link_rate) {
+      case 0x0: rate = "phy enabled; unknown"; break;
+      case 0x1: rate = "phy disabled"; break;
+      case 0x2: rate = "phy enabled; speed negotiation failed"; break;
+      case 0x3: rate = "phy enabled; SATA spinup hold state"; break;
+      case 0x4: rate = "phy enabled; port selector"; break;
+      case 0x5: rate = "phy enabled; reset in progress"; break;
+      case 0x6: rate = "phy enabled; unsupported phy attached"; break;
+      case 0x8: rate = "phy enabled; 1.5 Gbps"; break;
+      case 0x9: rate = "phy enabled; 3 Gbps"; break;
+      case 0xa: rate = "phy enabled; 6 Gbps"; break;
+      case 0xb: rate = "phy enabled; 12 Gbps"; break;
+      case 0xc: rate = "phy enabled; 22.5 Gbps"; break;
+      default:  rate = nullptr; break;
+    }
+    json::ref jphy = js[strprintf("scsi_sas_port_%d", phy.port)][strprintf("phy_%d", phy.identifier)];
+    jphy["identifier"] = phy.identifier;
+    if (rate)
+      jphy["negotiated logical link rate"] = rate;
+    else
+      jphy["negotiated logical link rate"] = strprintf("reserved [%d]", phy.link_rate);
+    jphy["Invalid DWORD count"] = phy.invalid_dwords;
+    jphy["Running disparity error count"] = phy.running_disparity_errors;
+    jphy["Loss of DWORD synchronization count"] = phy.loss_of_dword_sync;
+    jphy["Phy reset problem count"] = phy.phy_reset_problems;
+  }
+}
+
 // Write a JSON state file for one device, using the same json tree builder
 // and field names as smartctl -j so consumers can share a single parser.
 // Caller gates on state.json_dirty (set when this cycle produced fresh data);
@@ -1170,6 +1220,8 @@ static bool write_dev_state_json(const char * path, const dev_config & cfg,
     case 2: {
       if (state.scsi_lifetime_refreshed)
         write_scsi_lifetime_json(js, state.scsi_lifetime);
+      if (state.scsi_phys_refreshed)
+        write_scsi_sas_phys_json(js, state.scsi_phys);
       if (!state.scsi_logs_refreshed)
         break; // skip scsi_error_counter_log when not refreshed this cycle (stale .state values)
       const char * page_names[3] = {"read", "write", "verify"};
@@ -3105,6 +3157,9 @@ static int SCSIDeviceScan(dev_config & cfg, dev_state & state, scsi_device * scs
       case BACKGROUND_RESULTS_LPAGE:
         state.BackgroundResultsPageSupported = 1;
         break;
+      case PROTOCOL_SPECIFIC_LPAGE:
+        state.ProtocolSpecificPageSupported = 1;
+        break;
       default:
         break;
       }
@@ -4126,6 +4181,7 @@ static int ATACheckDevice(const dev_config & cfg, dev_state & state, ata_device 
   state.scsi_logs_refreshed = false;
   state.ata_devstat_refreshed = false;
   state.scsi_lifetime_refreshed = false;
+  state.scsi_phys_refreshed = false;
 
   if (!open_device(cfg, state, atadev, "ATA"))
     return 1;
@@ -4484,6 +4540,47 @@ static void read_scsi_lifetime_counters(const char * name, scsi_device * scsidev
     state.scsi_lifetime_refreshed = true;
 }
 
+// Read the SAS phy error counters from the Protocol Specific Port log page
+// (0x18), for the JSON state file. Decoded as smartctl -l sasphy does
+// (scsiprint.cpp: show_protocol_specific_port_page(), show_sas_port_param()).
+static void read_scsi_sas_phys(scsi_device * scsidev, dev_state & state)
+{
+  state.scsi_phys.clear();
+  if (!state.ProtocolSpecificPageSupported)
+    return;
+  uint8_t buf[1024];
+  if (scsiLogSense(scsidev, PROTOCOL_SPECIFIC_LPAGE, 0, buf, sizeof(buf), -1))
+    return;
+
+  int num = std::min<int>(sg_get_unaligned_be16(buf + 2), sizeof(buf) - 4);
+  const uint8_t * ucp = buf + 4;
+  for (int port = 0; num >= 8; port++) {
+    int param_len = ucp[3] + 4;
+    if (param_len > num || (ucp[4] & 0xf) != SCSI_TPROTO_SAS)
+      break; // truncated, or not SAS
+    const uint8_t * vcp = ucp + 8;
+    for (int j = 0; j + 48 <= param_len - 8; ) {
+      int spld_len = vcp[3];
+      spld_len = (spld_len < 44 ? 48 : spld_len + 4); // SAS-1: vcp[3] == 0
+      if (j + spld_len > param_len - 8)
+        break;
+      scsi_sas_phy_counters phy;
+      phy.port = port;
+      phy.identifier = vcp[1];
+      phy.link_rate = vcp[5] & 0xf;
+      phy.invalid_dwords = sg_get_unaligned_be32(vcp + 32);
+      phy.running_disparity_errors = sg_get_unaligned_be32(vcp + 36);
+      phy.loss_of_dword_sync = sg_get_unaligned_be32(vcp + 40);
+      phy.phy_reset_problems = sg_get_unaligned_be32(vcp + 44);
+      state.scsi_phys.push_back(phy);
+      vcp += spld_len; j += spld_len;
+    }
+    ucp += param_len; num -= param_len;
+  }
+  if (!state.scsi_phys.empty())
+    state.scsi_phys_refreshed = true;
+}
+
 static int SCSICheckDevice(const dev_config & cfg, dev_state & state, scsi_device * scsidev, bool allow_selftests)
 {
   // Reset per cycle; only positive/negative branches below overwrite this.
@@ -4501,6 +4598,7 @@ static int SCSICheckDevice(const dev_config & cfg, dev_state & state, scsi_devic
   state.scsi_logs_refreshed = false;
   state.ata_devstat_refreshed = false;
   state.scsi_lifetime_refreshed = false;
+  state.scsi_phys_refreshed = false;
 
   if (!open_device(cfg, state, scsidev, "SCSI"))
     return 1;
@@ -4604,8 +4702,10 @@ static int SCSICheckDevice(const dev_config & cfg, dev_state & state, scsi_devic
   }
 
   // Lifetime counters, for the JSON state file only
-  if (!cfg.json_state_file.empty())
+  if (!cfg.json_state_file.empty()) {
     read_scsi_lifetime_counters(name, scsidev, state);
+    read_scsi_sas_phys(scsidev, state);
+  }
 
   CloseDevice(scsidev, name);
   state.json_dirty = true;
@@ -4784,6 +4884,7 @@ static int NVMeCheckDevice(const dev_config & cfg, dev_state & state, nvme_devic
   state.scsi_logs_refreshed = false;
   state.ata_devstat_refreshed = false;
   state.scsi_lifetime_refreshed = false;
+  state.scsi_phys_refreshed = false;
 
   if (!open_device(cfg, state, nvmedev, "NVMe"))
     return 1;
