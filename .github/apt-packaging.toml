@@ -3,7 +3,8 @@
 kind = "A"
 upstream = "https://github.com/smartmontools/smartmontools"
 
-[exceptions]
-# The shared scripts/deb-version.py doesn't implement the Set A version yet
-# (docs/compliance-plan.md, section 3), so packaging/deb-version.py does.
-PKG-VERSION = "Set A version from packaging/deb-version.py until the shared script has it"
+# Upstream's history came from svn: its RELEASE_X_Y tags are on commits off
+# main, where git describe can't find them. The releases are main's own
+# "Release 7.5 RELEASE_7_5" commits.
+[version]
+release-subject = '^Release (\d+(?:\.\d+)+) RELEASE_\d+(?:_\d+)+$'

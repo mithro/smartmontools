@@ -30,6 +30,9 @@ concurrency:
 jobs:
   build-deb:
     uses: mithro/apt-repo-action/.github/workflows/build-deb.yml@main
+    with:
+      # The Set A version, from the shared scripts/deb-version.py.
+      version-args: --owner-tag welland --upstream-branch upstream
 
   publish-apt:
     # Scoped to this job alone. A job calling a reusable workflow sets the
