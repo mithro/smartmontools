@@ -52,16 +52,27 @@ stands upstream. See `git log upstream..packaging -- ':!debian' ':!packaging' ':
 
 ## Version
 
-`packaging/deb-version.py` (the shared script doesn't do Set A yet):
+apt-repo-action's shared `scripts/deb-version.py` makes it
+(`docs/packaging.md`, "Set A"): `version-args` in
+`.github/workflows/deb.yml` asks for the Set A form, and `[version]
+release-subject` in `.github/apt-packaging.toml` says which commits are
+upstream's releases.
 
     <release>+git<N>.g<sha7>-0+welland<M>[~deb<R>][~pr<P>]
 
 `<release>` is upstream's last release on `main` (its "Release X.Y
 RELEASE_X_Y" commit: the svn-imported `RELEASE_*` tags aren't on `main`),
-`N` the upstream commits since it, `sha7` the upstream commit built, and `M`
-the commits on `packaging` that aren't on `upstream`. For example
+`N` the upstream commits since it, `sha7` the upstream commit built (the
+merge base of the build and `upstream`), and `M` the commits on `packaging`
+that aren't on `upstream`. `~deb<R>` is the suite's Debian release (sid has
+none) and `~pr<P>` a pull request's preview. For example
 `7.5+git583.g06489e0-0+welland4~deb13`: above Debian's 7.5-2, below a
 Debian 8.0-1 (which is the signal to merge upstream).
+
+Exactly at an upstream release there is no `+git<N>.g<sha7>`, and the
+version is Debian's with ours added while `debian/changelog` is Debian's for
+that release: `7.5-2+welland<M>` at 7.5, since `debian/` is Debian's 7.5-2.
+At a release Debian's `debian/` isn't for, it is `<release>-0+welland<M>`.
 
 ## Updating to a new upstream
 
