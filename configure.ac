@@ -114,7 +114,7 @@ AC_CHECK_HEADERS([locale.h])
 AC_CHECK_HEADERS([byteswap.h], [], [], [])
 
 case "$host" in
-  *-*-freebsd*|*-*-dragonfly*|*-*-kfreebsd*-gnu*|*-*-midnightbsd*)
+  *-*-freebsd*)
     # Check for FreeBSD twe and twa include files
     AC_CHECK_HEADERS([sys/tweio.h sys/twereg.h sys/tw_osl_ioctl.h])
     # Check for the FreeBSD CCISS system header and use internal one if not found
@@ -444,22 +444,28 @@ esac
 AC_SUBST(CAPNG_LDADD)
 
 AC_ARG_WITH(libsystemd,
-  [AS_HELP_STRING([--with-libsystemd@<:@=auto|yes|no@:>@],
-    [Add systemd 'Type=notify' support to smartd [auto]])],
+  [AS_HELP_STRING([--with-libsystemd@<:@=auto|yes|reload|no@:>@],
+    [Add systemd 'Type=notify[-reload]' support to smartd [auto]])],
   [], [with_libsystemd=auto])
 
 use_libsystemd=no
 case "$with_libsystemd:$host_os" in
-  auto:linux*|yes:*)
+  auto:linux*|yes:*|reload:*)
     AC_CHECK_HEADERS([systemd/sd-daemon.h], [AC_CHECK_LIB([systemd], [sd_notify],
       [AC_DEFINE(HAVE_LIBSYSTEMD, 1,
         [Define to 1 if you have the `systemd' library (-lsystemd).]) dnl `vim syntax
        SYSTEMD_LDADD="-lsystemd"; use_libsystemd=yes],
-      [test "$with_libsystemd" != "yes" || AC_MSG_ERROR([libsystemd headers found but library is missing])])],
-      [test "$with_libsystemd" != "yes" || AC_MSG_ERROR([Missing libsystemd header files])])
+      [test "$with_libsystemd" != "yes" && test "$with_libsystemd" != "reload" || AC_MSG_ERROR([libsystemd headers found but library is missing])])],
+      [test "$with_libsystemd" != "yes" && test "$with_libsystemd" != "reload" || AC_MSG_ERROR([Missing libsystemd header files])])
     ;;
 esac
 AC_SUBST(SYSTEMD_LDADD)
+
+use_systemd_reload=no
+if test "$with_libsystemd" = "reload"; then
+  use_systemd_reload=yes
+fi
+AC_SUBST(use_systemd_reload)
 
 running_systemd=no
 case "$host_os:$cross_compiling:$with_libsystemd:$use_libsystemd" in
@@ -731,11 +737,14 @@ case "${host}" in
     os_nisdomainname="'nisdomainname' 'hostname -y' 'domainname'"
     os_man_filter=Linux
     ;;
-  *-*-freebsd*|*-*-dragonfly*|*-*-kfreebsd*-gnu*|*-*-midnightbsd*)
+  *-*-freebsd*)
     os_deps='os_freebsd.lo cciss.lo dev_areca.lo'
     os_libs='-lcam -lsbuf'
     os_dltools='fetch curl wget lynx'
-    AC_CHECK_LIB(usb, libusb20_dev_get_device_desc)
+    # The libusb 1.0 API references libpthread, which must be linked explicitly
+    # for static builds (--enable-static-link), so probe it with -lpthread too
+    AC_CHECK_LIB(usb, libusb_get_driver_np, [LIBS="-lusb $LIBS"], [], [-lpthread])
+    LIBS="$LIBS -lpthread"
     os_man_filter=FreeBSD
     ;;
   *-*-solaris*)
@@ -1134,7 +1143,8 @@ info=`
         linux*)
           echo "SELinux support:        ${with_selinux-no}"
           echo "libcap-ng support:      $use_libcap_ng"
-          echo "systemd notify support: $use_libsystemd" ;;
+          echo "systemd notify support: $use_libsystemd"
+          echo "use notify-reload:      $use_systemd_reload" ;;
       esac
       ;;
   esac
@@ -1153,9 +1163,13 @@ NVMe device scanning is now always enabled if supported.
 
 case "$running_systemd:$with_libsystemd:$use_libsystemd" in
   yes:auto:no) AC_MSG_WARN([
-systemd(1) is used on this system but smartd systemd notify support will
+systemd(1) is used on this system but smartd systemd notify[-reload] support will
 not be available because a required library is missing.
 Use option '--without-libsystemd' to suppress this warning.
+]) ;;
+  *:yes:yes|*:auto:yes) AC_MSG_NOTICE([
+systemd notify support has been enabled, consider enabling usage of notify-reload
+if smartd will run on a system with systemd version 253 or later.
 ]) ;;
 esac
 
